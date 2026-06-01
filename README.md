@@ -162,6 +162,21 @@ cd io.github.MarsGao.speed
 - **构建工具**: Gradle
 - **CI/CD**: GitHub Actions
 
+## 🧩 Xposed / LSPosed 说明
+
+在 LSPosed 管理器中，这类应用一般称为 **模块**，英文是 **Module**；不是插件（Plugin）。本项目在 LSPosed 中显示为 **视频调速 VideoSpeed** 模块。
+
+截至 2026-06-01，原版 LSPosed 最新正式版仍为 `1.9.2 (7024)`，但上游仓库已经归档。Android 15/16 设备后续如遇到 Xposed API 版本不足、模块提示需要 API 101、或系统服务 native hook 兼容问题，建议按维护文档迁移到仍活跃维护的 Vector / LSPosed 分支。
+
+当前 Android 16 验证基线：
+
+- OnePlus Ace 5: LSPosed `1.9.2 (7024) - Zygisk`, Xposed API `100`
+- OnePlus 13: LSPosed `1.11.0 (7209) - Zygisk`, Xposed API `100`
+- VideoSpeed: `1.2.1`
+- Twitter/X: `11.81.0-release.0` / Piko `v3.4.0`
+- 已观察到 `lspd` 与 `zygisk_lsposed` 正常运行
+- `sing-box` 与 `OPCameraPro` 等模块提示需要 Xposed API `101` 时，按维护文档评估是否迁移 Vector，不建议在核心功能正常时盲目替换框架。
+
 ## 🎯 Hook 策略
 
 项目采用多重 Hook 策略确保兼容性：

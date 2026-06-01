@@ -34,6 +34,120 @@
 
 ## 🚀 日常维护流程
 
+## 📱 设备侧 LSPosed / Vector 维护记录
+
+### 术语
+
+- LSPosed 中的中文名称：**模块**
+- 对应英文名称：**Module**
+- 不建议称为“插件 / Plugin”，避免和浏览器插件、Gradle 插件、系统扩展混淆。
+
+### OnePlus Ace 5 基线（2026-06-01）
+
+- 设备：OnePlus `PKG110`
+- Android：`16 (API 36)`
+- Slot：`_a`
+- Kernel：`6.1.118-android14-OP-Wild`
+- Root 栈：SukiSU Ultra / Wild Kernel 环境，ADB shell 中 `su` 不可直接访问，但 MMRL 已获得 Root 授权
+- LSPosed：`1.9.2 (7024) - Zygisk`
+- Xposed API：`100`
+- LSPosed 管理器入口：隐藏在 `com.android.shell` pinned shortcut，启动类别为 `org.lsposed.manager.LAUNCH_MANAGER`
+
+### OnePlus 13 基线（2026-06-01）
+
+- 设备：OnePlus `PJZ110`
+- Android：`16 (API 36)`
+- Slot：`_a`
+- Kernel：`6.6.89-android15-OP-WILD`
+- Root 栈：KernelSU Next / Wild Kernel 环境，ADB shell 中 `su` 不可直接访问
+- LSPosed：`1.11.0 (7209) - Zygisk`
+- Xposed API：`100`
+- LSPosed 管理器入口：同样隐藏在 `com.android.shell` pinned shortcut，启动类别为 `org.lsposed.manager.LAUNCH_MANAGER`
+
+可用 ADB 启动命令：
+
+```powershell
+$Adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
+& $Adb shell am start -a android.intent.action.MAIN -c org.lsposed.manager.LAUNCH_MANAGER -n com.android.shell/.BugreportWarningActivity
+```
+
+### 当前 LSPosed 模块清单（2026-06-01）
+
+#### OnePlus Ace 5
+
+| 模块 | 版本 | 状态 |
+|------|------|------|
+| 红薯猪手 | `1.2.7` | 未提示更新 |
+| 视频调速 VideoSpeed | `1.2.1` | 已验证用于 X/Piko 调速 |
+| Freely | `25.1024.0042` | 未提示更新 |
+| LuckyTool | `1.3.4` | 已从 `1.3.3` 升级 |
+| sing-box | `1.13.12` | 提示需要较新的 Xposed API `101` |
+| Telegram Speed Hook | `2.1 AR` | 未提示更新 |
+| 隐藏应用列表 / Hide My Applist | `3.8.r499.3a346c0` | 已从 `3.6.1.r462.4524dde` 升级 |
+
+#### OnePlus 13
+
+| 模块 | 版本 | 状态 |
+|------|------|------|
+| 红薯猪手 | `1.2.7` | 未提示更新 |
+| Bili调速 | `1.1.9` | 旧包名保留，未卸载 |
+| 视频调速 VideoSpeed | `1.2.1` | 已启用并勾选 `com.twitter.android` |
+| LuckyTool | `1.3.4` | 已从 `1.3.3` 升级 |
+| OPCameraPro | `Katrina_3.0.42` | `3.1.22` 提示需要 LSPosed v2.0+ / API `101`，暂不升级 |
+| sing-box | `1.13.12` | 提示需要较新的 Xposed API `101`，功能正常时暂不迁移框架 |
+| Telegram Speed Hook | `2.1 AR` | 未提示更新 |
+| 隐藏应用列表 / Hide My Applist | `3.8.r499.3a346c0` | 已从 `3.6.1.r462.4524dde` 升级 |
+| NewMiko | `1.8.0` | 未提示更新 |
+| WAuxiliary | `1.2.7.r1418.e65079c` | 已从 `1.2.7.r1255.7b778d2` 升级 |
+
+### 已完成的 APK 层更新（2026-06-01）
+
+#### OnePlus Ace 5
+
+- MMRL: `v34242-release` -> `v34296-release`
+- Wild KSU Manager: `v0.0.220` -> `v3.1.2`
+- LuckyTool: `1.3.3` -> `1.3.4`
+- Hide My Applist: `3.6.1.r462.4524dde` -> `3.8.r499.3a346c0`
+
+#### OnePlus 13
+
+- MMRL: `v34265-release` -> `v34296-release`
+- LuckyTool: `1.3.3` -> `1.3.4`
+- Hide My Applist: `3.6.1.r462.4524dde` -> `3.8.r499.3a346c0`
+- WAuxiliary: `1.2.7.r1255.7b778d2` -> `1.2.7.r1418.e65079c`
+- VideoSpeed: 安装新版 `io.github.MarsGao.speed 1.2.1`，并在 LSPosed 中启用、勾选 `com.twitter.android`
+
+OnePlus 13 保留项：
+
+- KernelSU Next Manager `v3.1.0` 未升级到 `v3.2.0`，因为新版管理器提高最低内核侧版本要求，不能只升级 APK。
+- OPCameraPro `Katrina_3.0.42` 未升级到 `3.1.22`，因为该版本要求 LSPosed v2.0+ / API `101`。
+- 旧包名 `com.veo.hook.bili.speed 1.1.9` 未卸载，避免破坏既有作用域；新版 `io.github.MarsGao.speed 1.2.1` 已并存启用。
+
+每次更新后至少确认：
+
+```powershell
+& $Adb devices -l
+& $Adb shell getprop sys.boot_completed
+& $Adb shell ps -A | Select-String "lspd|zygisk|Tricky|integrity"
+& $Adb shell dumpsys package <package.name> | Select-String "versionCode=|versionName="
+```
+
+### 迁移 Vector / 新 LSPosed 的触发条件
+
+原版 LSPosed `1.9.2 (7024)` 当前还能驱动 VideoSpeed，但它已经不适合作为 Android 16 长期维护基线。满足以下任一条件时，再迁移到活跃分支 Vector / LSPosed：
+
+- LSPosed 模块明确要求 Xposed API `101` 或更高，并且功能已受影响。
+- Hide My Applist `3.8+` 因系统服务 native library 加载限制失效。
+- Android 系统 OTA 后 `lspd`、`zygisk_lsposed` 不再正常运行。
+- VideoSpeed 或其他关键模块在目标应用中无法注入，且日志显示框架层问题。
+
+迁移原则：
+
+- 不在功能正常时盲目替换 LSPosed 核心。
+- 只从官方或可信上游下载 Vector / LSPosed zip。
+- 一次只替换一个框架模块，重启后验证 `lspd`、`zygisk_lsposed`、LSPosed 管理器、VideoSpeed 和 HMA。
+- 若更新后 bootloop，优先从 recovery/fastboot 禁用最近替换的模块，不继续叠加新模块。
+
 ### 场景 1: 日常代码更新
 
 当你完成代码修改并提交到个人仓库后：
