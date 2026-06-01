@@ -35,14 +35,14 @@
 | 微信视频号 WeChat | **8.0.62 (GP)** | ✅ 已测试 | 当前支持 Google Play 版本 |
 | 抖音 Douyin | 25.6.0 | ✅ 兼容新版本 | 含极速版 |
 | 小红书 | 8.23.0.5 | ✅ 兼容新老版本 | |
-| 推特 Twitter/X | 11.20.0 | ✅ 兼容新版本 | 推荐 [twitter-apk](https://github.com/crimera/twitter-apk) |
+| 推特 Twitter/X | 11.81.0-release.0 / Piko v3.4.0 | ✅ 兼容新版本 | 推荐 [Piko](https://github.com/crimera/piko) |
 | Instagram | 315.0.0.29.109 | ✅ 兼容新老版本 | 含 Instander |
 | Telegram | - | ✅ 不上混淆兼容 | |
 | 微博 Weibo | 14.6.0 | ✅ 理论兼容新老版本 | |
 
 > 📝 **说明**: 本人主要使用的应用均来自 **Google Play**，因此主要考虑适配 Google Play 版本。如需其他版本适配，欢迎提 [Issue](https://github.com/MarsGao/io.github.MarsGao.speed/issues) 反馈！
 
-> 💡 **推特用户推荐**: 如果你使用 Twitter/X，强烈推荐 [crimera/twitter-apk](https://github.com/crimera/twitter-apk) 项目，它提供了基于 Piko patches 的 APK 构建。
+> 💡 **推特用户推荐**: 如果你使用 Twitter/X，强烈推荐 [crimera/piko](https://github.com/crimera/piko) 项目，它提供了 X/Twitter 的 Piko patches。
 
 ## 🙏 致谢
 
@@ -173,6 +173,15 @@ cd io.github.MarsGao.speed
 5. **智能判断**: 通过调用栈分析区分自动播放和手动设置
 
 ## 📋 更新日志
+
+### v1.2.1 (2026-06-01)
+
+**🔧 Twitter/X Piko 适配更新**
+
+- 新增 Media3 / ExoPlayer 播放器 Hook，适配 X `11.81.0-release.0` / Piko `v3.4.0`
+- 拦截 `setPlaybackSpeed(1.0f)` 和 `setPlaybackParameters(...)` 的自动重置，恢复模块默认倍速
+- 在 `prepare`、`play`、`setPlayWhenReady(true)`、`setMediaItem(s)` 后补设播放速度
+- 保留旧版 Twitter/X Hook 作为 legacy fallback，并增加异常隔离和日志前缀
 
 ### v1.2.0 (2025-12-01)
 

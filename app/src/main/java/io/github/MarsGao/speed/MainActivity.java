@@ -9,6 +9,8 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.Toast;
 
+import java.io.File;
+
 public class MainActivity extends Activity {
     private static SharedPreferences prefs;
 
@@ -19,21 +21,13 @@ public class MainActivity extends Activity {
         final EditText et = findViewById(R.id.editTextText);
         final Button button = findViewById(R.id.button);
 
-        int retry = 14;
-        while (retry-- > 0) {
-            try {
-                prefs = this.getSharedPreferences("speed", Context.MODE_WORLD_READABLE);
-                float speed = prefs.getFloat("speed", 1.5f);
-                et.setText(String.valueOf(speed));
-                break;
-            } catch (SecurityException se) {
-                // The new XSharedPreferences is not enabled or module's not loading
-                prefs = null;
-            }
+        prefs = this.getSharedPreferences("speed", Context.MODE_PRIVATE);
+        if (!prefs.contains("speed")) {
+            prefs.edit().putFloat("speed", 1.5f).commit();
         }
-        if (retry <= 0) {
-            Toast.makeText(getApplicationContext(), "模块未激活，激活后重启本应用", Toast.LENGTH_LONG).show();
-        }
+        float initialSpeed = prefs.getFloat("speed", 1.5f);
+        et.setText(String.valueOf(initialSpeed));
+        makePrefsReadable();
 
         button.setOnClickListener(v -> {
             if (prefs == null) {
@@ -48,6 +42,7 @@ public class MainActivity extends Activity {
                     //
                     e.putFloat("speed", speed);
                     e.commit();
+                    makePrefsReadable();
                     Toast.makeText(getApplicationContext(), "设置成功，下一个视频生效", Toast.LENGTH_LONG).show();
                 } catch (NumberFormatException ignored) {
                     Toast.makeText(getApplicationContext(), "输浮点数字~~", Toast.LENGTH_LONG).show();
@@ -55,5 +50,11 @@ public class MainActivity extends Activity {
             }
         });
     }
-}
 
+    private void makePrefsReadable() {
+        File prefsFile = new File(getApplicationInfo().dataDir + "/shared_prefs/speed.xml");
+        if (prefsFile.exists()) {
+            prefsFile.setReadable(true, false);
+        }
+    }
+}

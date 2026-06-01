@@ -96,56 +96,9 @@ public class MainHook implements IXposedHookLoadPackage {
         }
         if (bili || twitter || douyin || red || wb || ig || tg || wx) {
             if (twitter) {
-                first = XposedHelpers.findAndHookMethod(Resources.class, "getConfiguration", new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        StackTraceElement[] stackTraceElements = Thread.currentThread().getStackTrace();
-                        if (stackTraceElements.length >= 14 && stackTraceElements.length < 21) {
-                            if ("android.os.HandlerThread".equals(stackTraceElements[stackTraceElements.length - 1].getClassName()) && "run".equals(stackTraceElements[stackTraceElements.length - 1].getMethodName())) {
-                                for (int i = 0; i < stackTraceElements.length; i++) {
-                                    if ("getConfiguration".equals(stackTraceElements[i].getMethodName())) {
-                                        if (stackTraceElements[i + 1].getClassName().equals(stackTraceElements[i + 2].getClassName()) && "onNext".equals(stackTraceElements[i + 4].getMethodName())) {
-                                            String className = stackTraceElements[i + 1].getClassName();
-                                            String methodName = stackTraceElements[i + 1].getMethodName();
-                                            Class<?> clz = XposedHelpers.findClass(stackTraceElements[i + 1].getClassName(), lpparam.classLoader);
-                                            for (Method m : clz.getDeclaredMethods()) {
-                                                if (methodName.equals(m.getName())) {
-                                                    XposedBridge.hookMethod(m, new XC_MethodHook() {
-                                                        @Override
-                                                        protected void afterHookedMethod(MethodHookParam param) throws IllegalAccessException, InvocationTargetException {
-                                                            if (twField == null) {
-                                                                for (Field f : param.thisObject.getClass().getDeclaredFields()) {
-                                                                    if (Modifier.isVolatile(f.getModifiers())) {
-                                                                        twField = f;
-                                                                        XposedBridge.log("twField: " + f);
-                                                                        break;
-                                                                    }
-                                                                }
-                                                            }
-                                                            Object c = twField.get(param.thisObject);
-                                                            if (twMethod == null) {
-                                                                twMethod = XposedHelpers.findMethodsByExactParameters(c.getClass(), void.class, double.class)[0];
-                                                                XposedBridge.log("twMethod: " + twMethod);
-                                                            }
-                                                            twMethod.invoke(c, getSpeedConfig());
-                                                        }
-                                                    });
-
-                                                    first.unhook();
-                                                    XposedBridge.log("hooked " + className + "->" + methodName);
-
-                                                    // we just hook it, thus we need re-enter the method
-                                                    param.setThrowable(new Resources.NotFoundException());
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
+                logTwitter("handleLoadPackage process=" + lpparam.processName);
+                hookTwitterModernPlayers(lpparam);
+                hookTwitterLegacy(lpparam);
 
             } else if (bili) {
                 // bilibili configured to tv.danmaku.ijk.media.player.IjkMediaPlayer
@@ -648,6 +601,297 @@ public class MainHook implements IXposedHookLoadPackage {
                 logWeChatHook("WeChat hook initialization completed");
             }
         }
+    }
+
+    private static final ThreadLocal<Boolean> twitterApplyingSpeed = new ThreadLocal<>();
+
+    private static void hookTwitterModernPlayers(XC_LoadPackage.LoadPackageParam lpparam) {
+        String[] playerClasses = {
+            "androidx.media3.exoplayer.ExoPlayerImpl",
+            "androidx.media3.exoplayer.SimpleExoPlayer",
+            "com.google.android.exoplayer2.ExoPlayerImpl",
+            "com.google.android.exoplayer2.SimpleExoPlayer"
+        };
+
+        int hookedCount = 0;
+        for (String className : playerClasses) {
+            try {
+                Class<?> playerClass = XposedHelpers.findClassIfExists(className, lpparam.classLoader);
+                if (playerClass == null) {
+                    continue;
+                }
+                hookedCount += hookTwitterPlayerClass(playerClass, lpparam.classLoader);
+            } catch (Exception e) {
+                logTwitter("modern hook failed for " + className + ": " + e.getMessage());
+            }
+        }
+
+        if (hookedCount > 0) {
+            logTwitter("modern hook installed");
+        } else {
+            logTwitter("no known player class found");
+        }
+    }
+
+    private static int hookTwitterPlayerClass(Class<?> playerClass, ClassLoader classLoader) {
+        int hookedCount = 0;
+        for (Method method : playerClass.getMethods()) {
+            try {
+                String name = method.getName();
+                Class<?>[] parameterTypes = method.getParameterTypes();
+                if ("setPlaybackSpeed".equals(name) && parameterTypes.length == 1 && parameterTypes[0] == float.class) {
+                    XposedBridge.hookMethod(method, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            handleTwitterSetPlaybackSpeed(param);
+                        }
+                    });
+                    hookedCount++;
+                    logTwitter("hooked " + playerClass.getName() + ".setPlaybackSpeed");
+                } else if ("setPlaybackParameters".equals(name) && parameterTypes.length == 1) {
+                    XposedBridge.hookMethod(method, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            handleTwitterSetPlaybackParameters(param, parameterTypes[0]);
+                        }
+                    });
+                    hookedCount++;
+                    logTwitter("hooked " + playerClass.getName() + ".setPlaybackParameters");
+                } else if (isTwitterPlayerApplyPoint(name, parameterTypes)) {
+                    XposedBridge.hookMethod(method, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            if ("setPlayWhenReady".equals(name) && param.args.length == 1 && param.args[0] instanceof Boolean && !((Boolean)param.args[0])) {
+                                return;
+                            }
+                            applyTwitterSpeed(param.thisObject, classLoader, "after " + name);
+                        }
+                    });
+                    hookedCount++;
+                    logTwitter("hooked " + playerClass.getName() + "." + name);
+                }
+            } catch (Throwable t) {
+                logTwitter("method hook skipped " + playerClass.getName() + "." + method.getName() + ": " + t.getMessage());
+            }
+        }
+        return hookedCount;
+    }
+
+    private static boolean isTwitterPlayerApplyPoint(String name, Class<?>[] parameterTypes) {
+        if ("prepare".equals(name) && parameterTypes.length == 0) {
+            return true;
+        }
+        if ("play".equals(name) && parameterTypes.length == 0) {
+            return true;
+        }
+        if ("setPlayWhenReady".equals(name) && parameterTypes.length == 1 && parameterTypes[0] == boolean.class) {
+            return true;
+        }
+        return (name.equals("setMediaItem") || name.equals("setMediaItems")) && parameterTypes.length >= 1;
+    }
+
+    private static void handleTwitterSetPlaybackSpeed(XC_MethodHook.MethodHookParam param) {
+        if (Boolean.TRUE.equals(twitterApplyingSpeed.get()) || !(param.args[0] instanceof Float)) {
+            return;
+        }
+
+        float requestedSpeed = (float)param.args[0];
+        float targetSpeed = getSpeedConfig();
+        if (Math.abs(targetSpeed - 1.0f) < 0.01f) {
+            return;
+        }
+
+        if (Math.abs(requestedSpeed - 1.0f) < 0.01f) {
+            param.args[0] = targetSpeed;
+            logTwitter("setPlaybackSpeed 1.0 -> " + targetSpeed);
+        } else if (Math.abs(requestedSpeed - targetSpeed) >= 0.01f) {
+            logTwitter("manual speed detected: " + requestedSpeed);
+        }
+    }
+
+    private static void handleTwitterSetPlaybackParameters(XC_MethodHook.MethodHookParam param, Class<?> playbackParametersClass) {
+        if (Boolean.TRUE.equals(twitterApplyingSpeed.get()) || param.args[0] == null) {
+            return;
+        }
+
+        float targetSpeed = getSpeedConfig();
+        if (Math.abs(targetSpeed - 1.0f) < 0.01f) {
+            return;
+        }
+
+        Float requestedSpeed = getPlaybackParametersSpeed(param.args[0]);
+        if (requestedSpeed == null) {
+            return;
+        }
+
+        if (Math.abs(requestedSpeed - 1.0f) < 0.01f) {
+            Object newParameters = newTwitterPlaybackParameters(playbackParametersClass, param.args[0], targetSpeed);
+            if (newParameters != null) {
+                param.args[0] = newParameters;
+                logTwitter("setPlaybackSpeed 1.0 -> " + targetSpeed);
+            }
+        } else if (Math.abs(requestedSpeed - targetSpeed) >= 0.01f) {
+            logTwitter("manual speed detected: " + requestedSpeed);
+        }
+    }
+
+    private static Float getPlaybackParametersSpeed(Object playbackParameters) {
+        try {
+            Object speed = XposedHelpers.getObjectField(playbackParameters, "speed");
+            if (speed instanceof Float) {
+                return (Float)speed;
+            }
+        } catch (Throwable ignored) {
+        }
+        return null;
+    }
+
+    private static Object newTwitterPlaybackParameters(Class<?> playbackParametersClass, Object oldParameters, float targetSpeed) {
+        try {
+            return XposedHelpers.newInstance(playbackParametersClass, targetSpeed);
+        } catch (Throwable ignored) {
+        }
+
+        float pitch = 1.0f;
+        try {
+            Object oldPitch = XposedHelpers.getObjectField(oldParameters, "pitch");
+            if (oldPitch instanceof Float) {
+                pitch = (Float)oldPitch;
+            }
+        } catch (Throwable ignored) {
+        }
+
+        try {
+            return XposedHelpers.newInstance(playbackParametersClass, targetSpeed, pitch);
+        } catch (Throwable e) {
+            logTwitter("failed to create PlaybackParameters: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private static void applyTwitterSpeed(Object player, ClassLoader classLoader, String source) {
+        float targetSpeed = getSpeedConfig();
+        if (Math.abs(targetSpeed - 1.0f) < 0.01f) {
+            return;
+        }
+
+        twitterApplyingSpeed.set(true);
+        try {
+            try {
+                XposedHelpers.callMethod(player, "setPlaybackSpeed", targetSpeed);
+                logTwitter(source + " applyTwitterSpeed: " + targetSpeed);
+                return;
+            } catch (Throwable ignored) {
+            }
+
+            Object playbackParameters = createTwitterPlaybackParameters(classLoader, targetSpeed);
+            if (playbackParameters != null) {
+                XposedHelpers.callMethod(player, "setPlaybackParameters", playbackParameters);
+                logTwitter(source + " applyTwitterSpeed: " + targetSpeed);
+            }
+        } catch (Throwable e) {
+            logTwitter(source + " apply failed: " + e.getMessage());
+        } finally {
+            twitterApplyingSpeed.remove();
+        }
+    }
+
+    private static Object createTwitterPlaybackParameters(ClassLoader classLoader, float targetSpeed) {
+        String[] parameterClasses = {
+            "androidx.media3.common.PlaybackParameters",
+            "com.google.android.exoplayer2.PlaybackParameters"
+        };
+
+        for (String className : parameterClasses) {
+            try {
+                Class<?> playbackParametersClass = XposedHelpers.findClassIfExists(className, classLoader);
+                if (playbackParametersClass == null) {
+                    continue;
+                }
+                Object parameters = newTwitterPlaybackParameters(playbackParametersClass, null, targetSpeed);
+                if (parameters != null) {
+                    return parameters;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
+    }
+
+    private static void hookTwitterLegacy(XC_LoadPackage.LoadPackageParam lpparam) {
+        try {
+            first = XposedHelpers.findAndHookMethod(Resources.class, "getConfiguration", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        StackTraceElement[] stackTraceElements = Thread.currentThread().getStackTrace();
+                        if (stackTraceElements.length >= 14 && stackTraceElements.length < 21) {
+                            if ("android.os.HandlerThread".equals(stackTraceElements[stackTraceElements.length - 1].getClassName()) && "run".equals(stackTraceElements[stackTraceElements.length - 1].getMethodName())) {
+                                for (int i = 0; i < stackTraceElements.length; i++) {
+                                    if ("getConfiguration".equals(stackTraceElements[i].getMethodName())) {
+                                        if (stackTraceElements[i + 1].getClassName().equals(stackTraceElements[i + 2].getClassName()) && "onNext".equals(stackTraceElements[i + 4].getMethodName())) {
+                                            String className = stackTraceElements[i + 1].getClassName();
+                                            String methodName = stackTraceElements[i + 1].getMethodName();
+                                            Class<?> clz = XposedHelpers.findClass(stackTraceElements[i + 1].getClassName(), lpparam.classLoader);
+                                            for (Method m : clz.getDeclaredMethods()) {
+                                                if (methodName.equals(m.getName())) {
+                                                    XposedBridge.hookMethod(m, new XC_MethodHook() {
+                                                        @Override
+                                                        protected void afterHookedMethod(MethodHookParam param) throws IllegalAccessException, InvocationTargetException {
+                                                            if (twField == null) {
+                                                                for (Field f : param.thisObject.getClass().getDeclaredFields()) {
+                                                                    if (Modifier.isVolatile(f.getModifiers())) {
+                                                                        twField = f;
+                                                                        XposedBridge.log("twField: " + f);
+                                                                        break;
+                                                                    }
+                                                                }
+                                                            }
+                                                            if (twField == null) {
+                                                                logTwitter("legacy volatile field not found");
+                                                                return;
+                                                            }
+                                                            Object c = twField.get(param.thisObject);
+                                                            if (twMethod == null) {
+                                                                Method[] methods = XposedHelpers.findMethodsByExactParameters(c.getClass(), void.class, double.class);
+                                                                if (methods.length == 0) {
+                                                                    logTwitter("legacy speed method not found");
+                                                                    return;
+                                                                }
+                                                                twMethod = methods[0];
+                                                                XposedBridge.log("twMethod: " + twMethod);
+                                                            }
+                                                            float targetSpeed = getSpeedConfig();
+                                                            twMethod.invoke(c, targetSpeed);
+                                                            logTwitter("legacy applyTwitterSpeed: " + targetSpeed);
+                                                        }
+                                                    });
+
+                                                    first.unhook();
+                                                    XposedBridge.log("hooked " + className + "->" + methodName);
+
+                                                    // we just hook it, thus we need re-enter the method
+                                                    param.setThrowable(new Resources.NotFoundException());
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } catch (Throwable e) {
+                        logTwitter("legacy hook callback failed: " + e.getMessage());
+                    }
+                }
+            });
+        } catch (Throwable e) {
+            logTwitter("legacy hook install failed: " + e.getMessage());
+        }
+    }
+
+    private static void logTwitter(String message) {
+        XposedBridge.log("[VideoSpeed][Twitter] " + message);
     }
 
     // ===== 微信Hook改进方案 =====
