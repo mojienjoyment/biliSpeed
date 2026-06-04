@@ -64,6 +64,72 @@
 - Xposed API：`100`
 - LSPosed 管理器入口：同样隐藏在 `com.android.shell` pinned shortcut，启动类别为 `org.lsposed.manager.LAUNCH_MANAGER`
 
+### OnePlus 13 微信 8.0.69 VideoSpeed 适配记录（2026-06-04）
+
+#### 设备与包状态
+
+- 设备：OnePlus 13 `PJZ110 / OP5D0DL1`
+- 系统：Android `16` / API `36`
+- 当前 slot：`_a`
+- 内核：`6.6.89-android15-OP-WILD`
+- 微信：`com.tencent.mm 8.0.69`，`versionCode=3022`，installer `com.android.vending`
+- VideoSpeed 更新前：`io.github.MarsGao.speed 1.2.1`，installer `com.android.packageinstaller`
+- 旧包：`com.veo.hook.bili.speed` 未安装
+- 进程基线：`lspd` 正常在跑，微信主进程和 `:push`、`:appbrand0`、`:appbrand1` 可启动
+
+#### 运行期诊断
+
+执行过：
+
+```powershell
+& $Adb logcat -c
+& $Adb shell am force-stop com.tencent.mm
+& $Adb shell monkey -p com.tencent.mm -c android.intent.category.LAUNCHER 1
+& $Adb shell logcat -d -v time | Select-String "\[VideoSpeed\]|LSPosed|lspd|com.tencent.mm"
+```
+
+诊断结论：
+
+- 微信能被 force-stop 并重新启动。
+- 旧版 `1.2.1` 在本轮微信主进程启动日志中未出现 `[VideoSpeed]` 初始化记录。
+- 因此后续验证必须先确认新版模块在 LSPosed 中启用且作用域包含 `com.tencent.mm`，必要时重启或软重启后再判断 hook 是否失效。
+- `adb shell su -c id` 在该设备返回 `su: inaccessible or not found`，不能作为 OnePlus 13 / KernelSU Next / Zygisk 栈 root 失效的单一判据。
+
+#### 1.2.2 代码变更
+
+- 微信入口新增 `ClassLoader.loadClass` 探针，只记录并扫描类名包含 `finder`、`video`、`player`、`liteav`、`thumb`、`play` 的候选类，日志上限 `120` 条。
+- 对候选类扫描 `float` 入参倍速方法，覆盖 `setRate`、`setSpeed`、`setPlaySpeed`、`setPlaybackSpeed`、`setPlaybackRate` 和 speed/rate/playback 命名。
+- 对 `start`、`play`、`resume`、`prepare`、`startVodPlay`、`startPlay`、`startLivePlay` 后主动调用目标倍速 API。
+- LiteAV 和 Finder 通用路径增加递归保护，避免主动设速调用再次被误判成手动修改。
+- 手动倍速判断只认可明确点击、触摸、`performClick` 或速度 UI 调用栈；普通播放初始化不再阻止自动设速。
+
+#### 验证判据
+
+安装 `1.2.2` 后，微信视频号诊断日志理想情况下应看到：
+
+- `[VideoSpeed] Starting WeChat hook with multi-strategy approach`
+- `[VideoSpeed] ClassLoader.loadClass probe installed`
+- `[VideoSpeed] [Discover] loadClass candidate:` 或 `Found player class:`
+- `[VideoSpeed] [Discover] hooked ...` 或 `Hooked TXVodPlayer.setRate`
+- 播放视频时出现 `Auto speed set`、`Init speed corrected`、`setRate target` 或 `setPlaybackParameters target`
+
+如果安装成功但没有任何 `[VideoSpeed]` 微信初始化日志，优先检查 LSPosed 模块启用和 `com.tencent.mm` 作用域，不直接继续改播放器方法名。最终通过标准以视频号播放页实际自动应用默认倍速为准；日志缺失只能说明当前日志出口或过滤方式不能证明 hook 过程。
+
+#### 本轮安装与验证结果
+
+- `.\gradlew.bat :app:assembleDebug` 已通过，输出 `app/build/outputs/apk/debug/app-debug.apk`。
+- 已用 `adb install -r` 安装到 OnePlus 13，设备侧显示 `io.github.MarsGao.speed 1.2.2` / `versionCode=1002002`。
+- 安装后已正常 `adb reboot`，重启后 `sys.boot_completed=1`、slot 仍为 `_a`、`lspd` 正常运行。
+- 重启后 force-stop 并启动微信，`logcat -b all` 未出现 `[VideoSpeed]` 初始化记录。
+- Twitter/X 对照启动也未出现 `[VideoSpeed]`，说明当前未能证明模块已被 LSPosed 加载到目标进程。
+- APK 内已确认存在 `assets/xposed_init` 和 `classes.dex`；`dumpsys package io.github.MarsGao.speed` 的系统可见性列表包含 `com.tencent.mm`。
+- 设备停在 PIN 锁屏，无法自动进入 LSPosed 管理器确认模块启用和 `com.tencent.mm` 作用域；下一步需要手动解锁后检查 LSPosed UI，再进入视频号播放页复测日志和体感。
+- 手动解锁后进入 LSPosed 管理器已确认：VideoSpeed `1.2.2` 模块开关为启用，Twitter/X `com.twitter.android` 已勾选，微信 `com.tencent.mm 8.0.69` 原先未勾选。
+- 已勾选微信 `com.tencent.mm` 作用域并重启设备。
+- 重启并解锁后，已 force-stop 微信、重新启动并进入 `com.tencent.mm.plugin.finder.ui.FinderHomeAffinityUI`；窗口焦点确认在视频号，UI 层级确认存在 `TextureView` 和 `SeekBar`。
+- `logcat -b all` 仍未出现 `[VideoSpeed]`、候选类探针或主动设速日志，因此本机当前 logcat 不能作为模块命中的可靠唯一证据。
+- 用户在视频号播放页体感确认：当前播放已经按 biliSpeed 调整后的速度运行。本轮 OnePlus 13 / 微信 `8.0.69 (3022) GP` 运行期目标判定为通过。
+
 可用 ADB 启动命令：
 
 ```powershell

@@ -589,6 +589,8 @@ public class MainHook implements IXposedHookLoadPackage {
             } else if (wx) {
                 logWeChatHook("Starting WeChat hook with multi-strategy approach");
 
+                hookWeChatClassLoaderProbe(lpparam);
+
                 // 优先级1: 通用播放器Hook（最可能成功）
                 hookWeChatPlayers(lpparam);
 
@@ -899,6 +901,38 @@ public class MainHook implements IXposedHookLoadPackage {
     // 用于存储当前速度设置，避免重复调用
     private static float wxCurrentSpeed = 1.0f;
     private static boolean wxSpeedInitialized = false;
+    private static final int WX_DISCOVERY_LOG_LIMIT = 120;
+    private static final java.util.Map<String, Boolean> wxDiscoveredClassNames = new ConcurrentHashMap<>();
+    private static final java.util.Map<String, Boolean> wxHookedClassNames = new ConcurrentHashMap<>();
+    private static final ThreadLocal<Boolean> wxApplyingSpeed = new ThreadLocal<>();
+
+    private static void hookWeChatClassLoaderProbe(XC_LoadPackage.LoadPackageParam lpparam) {
+        try {
+            XposedHelpers.findAndHookMethod(ClassLoader.class, "loadClass", String.class, boolean.class, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        if (param.hasThrowable() || !(param.args[0] instanceof String) || !(param.getResult() instanceof Class<?>)) {
+                            return;
+                        }
+                        String className = (String)param.args[0];
+                        if (!isWeChatInterestingClassName(className)) {
+                            return;
+                        }
+                        if (wxDiscoveredClassNames.size() < WX_DISCOVERY_LOG_LIMIT && wxDiscoveredClassNames.put(className, Boolean.TRUE) == null) {
+                            logWeChatHook("[Discover] loadClass candidate: " + className);
+                        }
+                        scanAndHookWeChatCandidateClass((Class<?>)param.getResult(), lpparam.classLoader, "loadClass");
+                    } catch (Throwable e) {
+                        logWeChatHook("[Discover] loadClass probe error: " + e.getMessage());
+                    }
+                }
+            });
+            logWeChatHook("ClassLoader.loadClass probe installed");
+        } catch (Throwable e) {
+            logWeChatHook("ClassLoader.loadClass probe failed: " + e.getMessage());
+        }
+    }
 
     /**
      * 方案1: 通用播放器Hook - 动态查找所有播放器相关类
@@ -913,31 +947,7 @@ public class MainHook implements IXposedHookLoadPackage {
             int hookedCount = 0;
             for (Class<?> clazz : candidateClasses) {
                 try {
-                    // 尝试hook setPlaySpeed方法
-                    Method speedMethod = XposedHelpers.findMethodExactIfExists(clazz, "setPlaySpeed", float.class);
-                    if (speedMethod != null) {
-                        XposedBridge.hookMethod(speedMethod, new XC_MethodHook() {
-                            @Override
-                            protected void beforeHookedMethod(MethodHookParam param) {
-                                handleWeChatSpeedChange(param, "universal");
-                            }
-                        });
-                        hookedCount++;
-                        logWeChatHook("Hooked universal: " + clazz.getName());
-                    }
-
-                    // 同时尝试hook setSpeed方法
-                    Method speedMethod2 = XposedHelpers.findMethodExactIfExists(clazz, "setSpeed", float.class);
-                    if (speedMethod2 != null) {
-                        XposedBridge.hookMethod(speedMethod2, new XC_MethodHook() {
-                            @Override
-                            protected void beforeHookedMethod(MethodHookParam param) {
-                                handleWeChatSpeedChange(param, "universal-speed");
-                            }
-                        });
-                        hookedCount++;
-                        logWeChatHook("Hooked universal setSpeed: " + clazz.getName());
-                    }
+                    hookedCount += scanAndHookWeChatCandidateClass(clazz, lpparam.classLoader, "known");
                 } catch (Exception e) {
                     // 忽略单个类的异常，继续下一个
                 }
@@ -949,6 +959,150 @@ public class MainHook implements IXposedHookLoadPackage {
 
         // 方案1.5: Hook腾讯视频SDK (liteav)
         hookTencentLiteAV(lpparam);
+    }
+
+    private static int scanAndHookWeChatCandidateClass(Class<?> clazz, ClassLoader classLoader, String source) {
+        if (clazz == null || clazz.getName() == null || !isWeChatInterestingClassName(clazz.getName())) {
+            return 0;
+        }
+        if (wxHookedClassNames.put(clazz.getName(), Boolean.TRUE) != null) {
+            return 0;
+        }
+
+        int hookedCount = 0;
+        for (Method method : clazz.getDeclaredMethods()) {
+            try {
+                Class<?>[] parameterTypes = method.getParameterTypes();
+                String methodName = method.getName();
+                if (parameterTypes.length == 1 && parameterTypes[0] == float.class && isWeChatSpeedMethodName(methodName, clazz.getName())) {
+                    method.setAccessible(true);
+                    XposedBridge.hookMethod(method, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            handleWeChatSpeedChange(param, source + "-" + clazz.getName() + "." + methodName);
+                        }
+
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            applyWeChatTargetSpeed(param.thisObject, classLoader, "after " + methodName);
+                        }
+                    });
+                    hookedCount++;
+                    logWeChatHook("[Discover] hooked float speed method: " + clazz.getName() + "." + methodName);
+                } else if (isWeChatPlaybackStartMethod(methodName, parameterTypes)) {
+                    method.setAccessible(true);
+                    XposedBridge.hookMethod(method, new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            applyWeChatTargetSpeed(param.thisObject, classLoader, "after " + methodName);
+                        }
+                    });
+                    hookedCount++;
+                    logWeChatHook("[Discover] hooked playback point: " + clazz.getName() + "." + methodName);
+                }
+            } catch (Throwable e) {
+                logWeChatHook("[Discover] skipped " + clazz.getName() + "." + method.getName() + ": " + e.getMessage());
+            }
+        }
+
+        if (hookedCount > 0) {
+            logWeChatHook("[Discover] candidate scan hooked " + hookedCount + " methods in " + clazz.getName());
+        }
+        return hookedCount;
+    }
+
+    private static boolean isWeChatInterestingClassName(String className) {
+        if (className == null) {
+            return false;
+        }
+        String lower = className.toLowerCase();
+        if (!(lower.startsWith("com.tencent.mm") || lower.startsWith("com.tencent.liteav") ||
+                lower.startsWith("com.tencent.rtmp") || lower.startsWith("com.google.android.exoplayer") ||
+                lower.startsWith("androidx.media3"))) {
+            return false;
+        }
+        return lower.contains("finder") || lower.contains("video") || lower.contains("player") ||
+                lower.contains("liteav") || lower.contains("thumb") || lower.contains("play");
+    }
+
+    private static boolean isWeChatSpeedMethodName(String methodName, String className) {
+        String lowerName = methodName.toLowerCase();
+        if (lowerName.contains("speed") || lowerName.contains("rate") || lowerName.contains("playback")) {
+            return true;
+        }
+        String lowerClass = className.toLowerCase();
+        return lowerName.startsWith("set") && (lowerClass.contains("player") || lowerClass.contains("video") ||
+                lowerClass.contains("finder") || lowerClass.contains("liteav"));
+    }
+
+    private static boolean isWeChatPlaybackStartMethod(String methodName, Class<?>[] parameterTypes) {
+        String lowerName = methodName.toLowerCase();
+        if (parameterTypes.length == 0 && (lowerName.equals("start") || lowerName.equals("play") ||
+                lowerName.equals("resume") || lowerName.equals("prepare"))) {
+            return true;
+        }
+        return lowerName.equals("startvodplay") || lowerName.equals("startplay") || lowerName.equals("startliveplay");
+    }
+
+    private static void applyWeChatTargetSpeed(Object player, ClassLoader classLoader, String source) {
+        float targetSpeed = getSpeedConfig();
+        if (player == null || Math.abs(targetSpeed - 1.0f) < 0.01f || Boolean.TRUE.equals(wxApplyingSpeed.get())) {
+            return;
+        }
+
+        wxApplyingSpeed.set(true);
+        try {
+            String[] directMethods = {"setRate", "setSpeed", "setPlaySpeed", "setPlaybackSpeed", "setPlaybackRate"};
+            for (String methodName : directMethods) {
+                try {
+                    XposedHelpers.callMethod(player, methodName, targetSpeed);
+                    lastSpeedMap.put(player, targetSpeed);
+                    logWeChatHook(source + " setRate target via " + methodName + ": " + targetSpeed);
+                    return;
+                } catch (Throwable ignored) {
+                }
+            }
+
+            Object playbackParameters = createWeChatPlaybackParameters(classLoader, targetSpeed);
+            if (playbackParameters != null) {
+                try {
+                    XposedHelpers.callMethod(player, "setPlaybackParameters", playbackParameters);
+                    lastSpeedMap.put(player, targetSpeed);
+                    logWeChatHook(source + " setPlaybackParameters target: " + targetSpeed);
+                } catch (Throwable e) {
+                    logWeChatHook(source + " setPlaybackParameters failed: " + e.getMessage());
+                }
+            }
+        } finally {
+            wxApplyingSpeed.remove();
+        }
+    }
+
+    private static Object createWeChatPlaybackParameters(ClassLoader classLoader, float targetSpeed) {
+        String[] parameterClasses = {
+            "androidx.media3.common.PlaybackParameters",
+            "com.google.android.exoplayer2.PlaybackParameters"
+        };
+
+        for (String className : parameterClasses) {
+            try {
+                Class<?> playbackParametersClass = XposedHelpers.findClassIfExists(className, classLoader);
+                if (playbackParametersClass == null) {
+                    continue;
+                }
+                try {
+                    return XposedHelpers.newInstance(playbackParametersClass, targetSpeed);
+                } catch (Throwable ignored) {
+                }
+                try {
+                    return XposedHelpers.newInstance(playbackParametersClass, targetSpeed, 1.0f);
+                } catch (Throwable e) {
+                    logWeChatHook("Failed to create " + className + ": " + e.getMessage());
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
     }
 
     /**
@@ -1074,8 +1228,7 @@ public class MainHook implements IXposedHookLoadPackage {
                             // 延迟设置速度，确保播放器已准备好
                             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
                                 try {
-                                    XposedHelpers.callMethod(param.thisObject, "setRate", targetSpeed);
-                                    logWeChatHook("Set speed after startVodPlay: " + targetSpeed);
+                                    applyWeChatTargetSpeed(param.thisObject, lpparam.classLoader, "after startVodPlay delayed");
                                 } catch (Exception e) {
                                     logWeChatHook("Failed to set speed after startVodPlay: " + e.getMessage());
                                 }
@@ -1097,11 +1250,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         @Override
                         protected void afterHookedMethod(MethodHookParam param) {
                             try {
-                                float targetSpeed = getSpeedConfig();
-                                if (Math.abs(targetSpeed - 1.0f) > 0.01f) {
-                                    XposedHelpers.callMethod(param.thisObject, "setRate", targetSpeed);
-                                    logWeChatHook("Set speed after " + methodName + ": " + targetSpeed);
-                                }
+                                applyWeChatTargetSpeed(param.thisObject, lpparam.classLoader, "after " + methodName);
                             } catch (Exception e) {
                                 // 忽略
                             }
@@ -1162,6 +1311,9 @@ public class MainHook implements IXposedHookLoadPackage {
      */
     private static void handleLiteAVSpeedChange(XC_MethodHook.MethodHookParam param, String source) {
         try {
+            if (Boolean.TRUE.equals(wxApplyingSpeed.get())) {
+                return;
+            }
             float speed = (float) param.args[0];
             float targetSpeed = getSpeedConfig();
 
@@ -1174,10 +1326,13 @@ public class MainHook implements IXposedHookLoadPackage {
                     param.args[0] = targetSpeed;
                     logWeChatHook("[LiteAV] Auto speed set from " + source + ": " + targetSpeed);
                 }
-            } else if (Math.abs(speed - targetSpeed) > 0.01f) {
+            } else if (Math.abs(speed - targetSpeed) > 0.01f && isManualSpeedChange()) {
                 // 用户手动修改了速度，保存这个设置
                 // 注意：这里不修改param.args[0]，让用户的设置生效
                 logWeChatHook("[LiteAV] Manual speed change detected: " + speed);
+            } else if (Math.abs(speed - targetSpeed) > 0.01f) {
+                param.args[0] = targetSpeed;
+                logWeChatHook("[LiteAV] Init speed corrected from " + source + ": " + targetSpeed);
             }
         } catch (Exception e) {
             logWeChatHook("[LiteAV] Error in speed change handler: " + e.getMessage());
@@ -1293,6 +1448,9 @@ public class MainHook implements IXposedHookLoadPackage {
      */
     private static void handleWeChatSpeedChange(XC_MethodHook.MethodHookParam param, String source) {
         try {
+            if (Boolean.TRUE.equals(wxApplyingSpeed.get())) {
+                return;
+            }
             float speed = (float) param.args[0];
             float targetSpeed = getSpeedConfig();
             Object playerInstance = param.thisObject;
@@ -1339,10 +1497,15 @@ public class MainHook implements IXposedHookLoadPackage {
             } 
             // 如果传入的速度不是1.0，说明是用户手动设置或已经被我们修改过
             else if (Math.abs(speed - targetSpeed) > 0.01f) {
-                // 用户设置了不同于目标的速度，记录为手动修改
-                logWeChatHook("[Proxy] User custom speed detected: " + speed);
-                lastSpeedMap.put(playerInstance, speed);
-                lastManualChangeTimeMap.put(playerInstance, currentTime);
+                if (isManualSpeedChange()) {
+                    logWeChatHook("[Proxy] User custom speed detected: " + speed);
+                    lastSpeedMap.put(playerInstance, speed);
+                    lastManualChangeTimeMap.put(playerInstance, currentTime);
+                } else if (!inCooldown) {
+                    param.args[0] = targetSpeed;
+                    lastSpeedMap.put(playerInstance, targetSpeed);
+                    logWeChatHook("[Proxy] Init speed corrected from " + source + ": " + targetSpeed);
+                }
             } else {
                 // 速度已经是目标速度，正常通过
                 logWeChatHook("[Proxy] Speed already at target: " + speed);

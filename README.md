@@ -32,7 +32,7 @@
 | 应用 | 适配版本 | 兼容性 | 备注 |
 |------|----------|--------|------|
 | 哔哩哔哩 B站 | 7.25.0 / **3.20.4 (GP)** | ✅ 兼容新老版本 | 推荐 Google Play 版本 |
-| 微信视频号 WeChat | **8.0.62 (GP)** | ✅ 已测试 | 当前支持 Google Play 版本 |
+| 微信视频号 WeChat | **8.0.69 (3022 GP)** | ✅ OnePlus 13 适配 | 当前支持 Google Play 版本 |
 | 抖音 Douyin | 25.6.0 | ✅ 兼容新版本 | 含极速版 |
 | 小红书 | 8.23.0.5 | ✅ 兼容新老版本 | |
 | 推特 Twitter/X | 11.81.0-release.0 / Piko v3.4.0 | ✅ 兼容新版本 | 推荐 [Piko](https://github.com/crimera/piko) |
@@ -233,6 +233,16 @@ cd io.github.MarsGao.speed
   - 新增多版本方法签名兼容
   - 支持 `VideoPlayer.setPlaybackSpeed` 备选方案
   - 修复 `NoSuchMethodError` 异常
+
+### v1.2.2 (2026-06-04)
+
+**🔧 微信视频号 8.0.69 GP 兼容性修复**
+
+- ✅ 新增微信候选播放器类加载探针，记录 Finder、video、player、liteav、thumb、play 相关类命中
+- ✅ 新增候选播放器类通用方法扫描，自动 Hook `setRate` / `setSpeed` / `setPlaySpeed` / `setPlaybackSpeed` 等 float 倍速方法
+- ✅ 播放 `start` / `play` / `resume` / `prepare` 后主动补设目标倍速
+- ✅ LiteAV 路径不再只依赖入参 `1.0f`，普通播放初始化速度会自动纠正为目标倍速
+- ✅ 收紧手动倍速判断，只有明确点击、触摸或速度 UI 调用栈才视为用户手动修改
 
 ### v1.1.8 (2025-11-30)
 
