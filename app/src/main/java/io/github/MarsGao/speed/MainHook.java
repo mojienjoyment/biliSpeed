@@ -47,6 +47,11 @@ public class MainHook implements IXposedHookLoadPackage {
         prefs.reload();
         return prefs.getFloat("speed", 1.5f);
     }
+
+    private static float getWeChatSpeedConfig() {
+        prefs.reload();
+        return prefs.getFloat("speed", 2.0f);
+    }
     private static boolean hasSpeedConfigChanged() {
         return prefs.hasFileChanged();
     }
@@ -589,6 +594,10 @@ public class MainHook implements IXposedHookLoadPackage {
             } else if (wx) {
                 logWeChatHook("Starting WeChat hook with multi-strategy approach");
 
+                // 视频号 feed 流：进入/滑动后主动对当前播放器实例注入目标倍速。
+                hookWeChatFinderFeedSpeedInjector(lpparam);
+                hookWeChatFinderSpeedMenuClick(lpparam);
+
                 hookWeChatClassLoaderProbe(lpparam);
 
                 // 优先级1: 通用播放器Hook（最可能成功）
@@ -904,33 +913,104 @@ public class MainHook implements IXposedHookLoadPackage {
     private static final int WX_DISCOVERY_LOG_LIMIT = 120;
     private static final java.util.Map<String, Boolean> wxDiscoveredClassNames = new ConcurrentHashMap<>();
     private static final java.util.Map<String, Boolean> wxHookedClassNames = new ConcurrentHashMap<>();
+    private static volatile long wxLastManualSpeedChangeAt = 0L;
+    private static final int WX_FINDER_RECYCLER_VIEW_ID = 2131318338; // R.id.m6e
+    private static final int WX_FINDER_VIDEO_LAYOUT_ID = 2131304752; // R.id.e_k
     private static final ThreadLocal<Boolean> wxApplyingSpeed = new ThreadLocal<>();
+
+    private static void hookWeChatFinderFeedSpeedInjector(XC_LoadPackage.LoadPackageParam lpparam) {
+        try {
+            XposedHelpers.findAndHookMethod(android.app.Activity.class, "onResume", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    if (isWeChatFinderActivity(param.thisObject)) {
+                        scheduleApplyWeChatFinderCurrentSpeed((android.app.Activity)param.thisObject, "FinderActivity.onResume", 350);
+                        scheduleApplyWeChatFinderCurrentSpeed((android.app.Activity)param.thisObject, "FinderActivity.onResume", 1200);
+                    }
+                }
+            });
+            XposedHelpers.findAndHookMethod(android.app.Activity.class, "dispatchTouchEvent", android.view.MotionEvent.class, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    if (isWeChatFinderActivity(param.thisObject) && param.args[0] instanceof android.view.MotionEvent) {
+                        android.view.MotionEvent event = (android.view.MotionEvent)param.args[0];
+                        if (event.getActionMasked() == android.view.MotionEvent.ACTION_UP) {
+                            scheduleApplyWeChatFinderCurrentSpeed((android.app.Activity)param.thisObject, "FinderActivity.touchUp", 450);
+                        }
+                    }
+                }
+            });
+            logWeChatHook("[FinderInject] Activity resume/touch hooks installed");
+        } catch (Throwable e) {
+            logWeChatHook("[FinderInject] Activity hooks failed: " + e.getMessage());
+        }
+    }
+
+    private static void hookWeChatFinderSpeedMenuClick(XC_LoadPackage.LoadPackageParam lpparam) {
+        try {
+            XposedHelpers.findAndHookMethod(
+                "com.tencent.mm.plugin.finder.viewmodel.component.q40",
+                lpparam.classLoader,
+                "onClick",
+                android.view.View.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        try {
+                            Object tag = ((android.view.View)param.args[0]).getTag();
+                            if (tag instanceof Float) {
+                                wxLastManualSpeedChangeAt = System.currentTimeMillis();
+                                logWeChatHook("[FinderInject] manual speed menu click: " + tag);
+                            }
+                        } catch (Throwable e) {
+                            logWeChatHook("[FinderInject] manual speed click inspect failed: " + e.getMessage());
+                        }
+                    }
+                }
+            );
+            logWeChatHook("[FinderInject] q40.onClick hook installed");
+        } catch (Throwable e) {
+            logWeChatHook("[FinderInject] q40.onClick hook failed: " + e.getMessage());
+        }
+    }
 
     private static void hookWeChatClassLoaderProbe(XC_LoadPackage.LoadPackageParam lpparam) {
         try {
             XposedHelpers.findAndHookMethod(ClassLoader.class, "loadClass", String.class, boolean.class, new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
-                    try {
-                        if (param.hasThrowable() || !(param.args[0] instanceof String) || !(param.getResult() instanceof Class<?>)) {
-                            return;
-                        }
-                        String className = (String)param.args[0];
-                        if (!isWeChatInterestingClassName(className)) {
-                            return;
-                        }
-                        if (wxDiscoveredClassNames.size() < WX_DISCOVERY_LOG_LIMIT && wxDiscoveredClassNames.put(className, Boolean.TRUE) == null) {
-                            logWeChatHook("[Discover] loadClass candidate: " + className);
-                        }
-                        scanAndHookWeChatCandidateClass((Class<?>)param.getResult(), lpparam.classLoader, "loadClass");
-                    } catch (Throwable e) {
-                        logWeChatHook("[Discover] loadClass probe error: " + e.getMessage());
-                    }
+                    handleWeChatLoadedClass(param, lpparam.classLoader);
+                }
+            });
+            XposedHelpers.findAndHookMethod(ClassLoader.class, "loadClass", String.class, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    handleWeChatLoadedClass(param, lpparam.classLoader);
                 }
             });
             logWeChatHook("ClassLoader.loadClass probe installed");
         } catch (Throwable e) {
             logWeChatHook("ClassLoader.loadClass probe failed: " + e.getMessage());
+        }
+    }
+
+    private static void handleWeChatLoadedClass(XC_MethodHook.MethodHookParam param, ClassLoader appClassLoader) {
+        try {
+            if (param.hasThrowable() || !(param.args[0] instanceof String) || !(param.getResult() instanceof Class<?>)) {
+                return;
+            }
+            String className = (String)param.args[0];
+            Class<?> clazz = (Class<?>)param.getResult();
+
+            if (!isWeChatInterestingClassName(className)) {
+                return;
+            }
+            if (wxDiscoveredClassNames.size() < WX_DISCOVERY_LOG_LIMIT && wxDiscoveredClassNames.put(className, Boolean.TRUE) == null) {
+                logWeChatHook("[Discover] loadClass candidate: " + className);
+            }
+            scanAndHookWeChatCandidateClass(clazz, appClassLoader, "loadClass");
+        } catch (Throwable e) {
+            logWeChatHook("[Discover] loadClass probe error: " + e.getMessage());
         }
     }
 
@@ -1030,9 +1110,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (lowerName.contains("speed") || lowerName.contains("rate") || lowerName.contains("playback")) {
             return true;
         }
-        String lowerClass = className.toLowerCase();
-        return lowerName.startsWith("set") && (lowerClass.contains("player") || lowerClass.contains("video") ||
-                lowerClass.contains("finder") || lowerClass.contains("liteav"));
+        return lowerName.equals("h6") || lowerName.equals("tpsetplayspeed");
     }
 
     private static boolean isWeChatPlaybackStartMethod(String methodName, Class<?>[] parameterTypes) {
@@ -1045,14 +1123,23 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     private static void applyWeChatTargetSpeed(Object player, ClassLoader classLoader, String source) {
-        float targetSpeed = getSpeedConfig();
+        float targetSpeed = getWeChatSpeedConfig();
         if (player == null || Math.abs(targetSpeed - 1.0f) < 0.01f || Boolean.TRUE.equals(wxApplyingSpeed.get())) {
             return;
         }
 
         wxApplyingSpeed.set(true);
         try {
-            String[] directMethods = {"setRate", "setSpeed", "setPlaySpeed", "setPlaybackSpeed", "setPlaybackRate"};
+            String[] directMethods = {
+                "setRate",
+                "setSpeed",
+                "setPlaySpeed",
+                "setPlaybackSpeed",
+                "setPlaybackRate",
+                "setPlaySpeedRatio",
+                "setVideoSpeedRatio",
+                "tpSetPlaySpeed"
+            };
             for (String methodName : directMethods) {
                 try {
                     XposedHelpers.callMethod(player, methodName, targetSpeed);
@@ -1076,6 +1163,113 @@ public class MainHook implements IXposedHookLoadPackage {
         } finally {
             wxApplyingSpeed.remove();
         }
+    }
+
+    private static boolean isWeChatFinderActivity(Object object) {
+        return object instanceof android.app.Activity &&
+                object.getClass().getName().startsWith("com.tencent.mm.plugin.finder.") &&
+                object.getClass().getName().contains("FinderHome");
+    }
+
+    private static void scheduleApplyWeChatFinderCurrentSpeed(android.app.Activity activity, String source, long delayMs) {
+        new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+            try {
+                applyWeChatFinderCurrentSpeed(activity, source);
+            } catch (Throwable e) {
+                logWeChatHook("[FinderInject] " + source + " failed: " + e.getMessage());
+            }
+        }, delayMs);
+    }
+
+    private static void applyWeChatFinderCurrentSpeed(android.app.Activity activity, String source) {
+        float targetSpeed = getWeChatSpeedConfig();
+        if (Math.abs(targetSpeed - 1.0f) < 0.01f) {
+            return;
+        }
+        long manualAge = System.currentTimeMillis() - wxLastManualSpeedChangeAt;
+        if (manualAge >= 0 && manualAge < MANUAL_CHANGE_COOLDOWN) {
+            logWeChatHook("[FinderInject] " + source + " skipped in manual cooldown");
+            return;
+        }
+        android.view.View recycler = activity.findViewById(WX_FINDER_RECYCLER_VIEW_ID);
+        try {
+            Object innerRecycler = XposedHelpers.callMethod(recycler, "getRecyclerView");
+            if (innerRecycler instanceof android.view.View) {
+                recycler = (android.view.View)innerRecycler;
+            }
+        } catch (Throwable ignored) {
+        }
+        if (!(recycler instanceof android.view.ViewGroup)) {
+            logWeChatHook("[FinderInject] " + source + " recycler not found");
+            return;
+        }
+        android.view.ViewGroup recyclerView = (android.view.ViewGroup)recycler;
+        Object holder = findWeChatFinderCurrentHolder(recyclerView);
+        if (holder == null) {
+            logWeChatHook("[FinderInject] " + source + " holder not found");
+            return;
+        }
+        Object videoLayout = XposedHelpers.callMethod(holder, "o", WX_FINDER_VIDEO_LAYOUT_ID);
+        if (videoLayout == null) {
+            logWeChatHook("[FinderInject] " + source + " video layout not found");
+            return;
+        }
+        Object videoView = XposedHelpers.callMethod(videoLayout, "getVideoView");
+        if (videoView == null) {
+            logWeChatHook("[FinderInject] " + source + " video view not found");
+            return;
+        }
+        applyWeChatTargetSpeed(videoView, activity.getClassLoader(), source + " current " + videoView.getClass().getName());
+    }
+
+    private static Object findWeChatFinderCurrentHolder(android.view.ViewGroup recyclerView) {
+        int position = -1;
+        try {
+            Object layoutManager = XposedHelpers.callMethod(recyclerView, "getLayoutManager");
+            if (layoutManager != null) {
+                Object result = XposedHelpers.callMethod(layoutManager, "w");
+                if (result instanceof Integer) {
+                    position = (Integer)result;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        if (position < 0) {
+            try {
+                Object layoutManager = XposedHelpers.callMethod(recyclerView, "getLayoutManager");
+                Object result = XposedHelpers.callMethod(layoutManager, "findFirstVisibleItemPosition");
+                if (result instanceof Integer) {
+                    position = (Integer)result;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        if (position >= 0) {
+            try {
+                Object holder = XposedHelpers.callMethod(recyclerView, "q0", position, false);
+                if (holder != null) {
+                    return holder;
+                }
+            } catch (Throwable ignored) {
+            }
+            try {
+                Object holder = XposedHelpers.callMethod(recyclerView, "findViewHolderForAdapterPosition", position);
+                if (holder != null) {
+                    return holder;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        for (int i = 0; i < recyclerView.getChildCount(); i++) {
+            try {
+                Object holder = XposedHelpers.callMethod(recyclerView, "getChildViewHolder", recyclerView.getChildAt(i));
+                if (holder != null && "me5.s0".equals(holder.getClass().getName())) {
+                    return holder;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
     }
 
     private static Object createWeChatPlaybackParameters(ClassLoader classLoader, float targetSpeed) {

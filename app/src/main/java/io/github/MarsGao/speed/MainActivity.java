@@ -36,14 +36,13 @@ public class MainActivity extends Activity {
                 SharedPreferences.Editor e = prefs.edit();
                 try {
                     float speed = Float.parseFloat(et.getText().toString());
-                    // hack: make config change
-                    e.remove("speed");
-                    e.apply();
-                    //
                     e.putFloat("speed", speed);
-                    e.commit();
-                    makePrefsReadable();
-                    Toast.makeText(getApplicationContext(), "设置成功，下一个视频生效", Toast.LENGTH_LONG).show();
+                    if (e.commit()) {
+                        makePrefsReadable();
+                        Toast.makeText(getApplicationContext(), "设置成功，下一个视频生效", Toast.LENGTH_LONG).show();
+                    } else {
+                        Toast.makeText(getApplicationContext(), "设置失败", Toast.LENGTH_LONG).show();
+                    }
                 } catch (NumberFormatException ignored) {
                     Toast.makeText(getApplicationContext(), "输浮点数字~~", Toast.LENGTH_LONG).show();
                 }
@@ -52,6 +51,12 @@ public class MainActivity extends Activity {
     }
 
     private void makePrefsReadable() {
+        File dataDir = new File(getApplicationInfo().dataDir);
+        dataDir.setExecutable(true, false);
+        File prefsDir = new File(dataDir, "shared_prefs");
+        if (prefsDir.exists()) {
+            prefsDir.setExecutable(true, false);
+        }
         File prefsFile = new File(getApplicationInfo().dataDir + "/shared_prefs/speed.xml");
         if (prefsFile.exists()) {
             prefsFile.setReadable(true, false);

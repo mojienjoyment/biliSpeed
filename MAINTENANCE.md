@@ -137,6 +137,37 @@ $Adb = Join-Path $env:LOCALAPPDATA 'Android\Sdk\platform-tools\adb.exe'
 & $Adb shell am start -a android.intent.action.MAIN -c org.lsposed.manager.LAUNCH_MANAGER -n com.android.shell/.BugreportWarningActivity
 ```
 
+### Xiaomi 14 Pro 微信 8.0.69 / versionCode 3040 VideoSpeed 适配记录（2026-06-19）
+
+#### 设备与包状态
+
+- 设备：Xiaomi 14 Pro `shennong`
+- 系统：`BP2A.250605.031.A3`
+- 当前 slot：`_a`
+- 微信：`com.tencent.mm 8.0.69`，`versionCode=3040`
+- VideoSpeed：`io.github.MarsGao.speed 1.2.3`，`versionCode=1002003`
+- Root / 框架：Root 可用，Vector / LSPosed fork 的 `lspd` 正常运行
+
+#### 根因与修复
+
+- 视频号 feed 流在该版本不走旧的 `FinderThumbPlayerProxy.play/setPlaySpeed` 被动 hook 路径，旧版会出现注册成功但运行期零命中的情况。
+- 实际可控点为当前 feed holder 中 `FinderVideoLayout.getVideoView()` 返回的 `com.tencent.mm.plugin.finder.video.FinderThumbPlayerProxy`。
+- `1.2.3` 在 `FinderHome` Activity `onResume` 后和 `dispatchTouchEvent ACTION_UP` 后延迟定位当前 holder，并主动调用 `setPlaySpeed(targetSpeed)`。
+- 设置页修复 `SharedPreferences` 保存逻辑，并给应用数据目录和 `shared_prefs` 目录设置可遍历权限，保证 `XSharedPreferences` 可跨进程读取。
+- 微信分支使用微信专用兜底默认值 `2.0f`，避免配置不可读时回退到历史默认 `1.5f`。
+
+#### 验证结果
+
+- 用户确认打开微信视频号默认即为 `2.0x` 播放。
+- 将 BiliSpeed 设置页默认速度调整为 `1.5x` 后，微信视频号运行日志确认注入目标变为 `1.5`。
+- 关键日志：
+  - `FinderActivity.onResume current com.tencent.mm.plugin.finder.video.FinderThumbPlayerProxy setRate target via setPlaySpeed: 2.0`
+  - `FinderActivity.touchUp current com.tencent.mm.plugin.finder.video.FinderThumbPlayerProxy setRate target via setPlaySpeed: 2.0`
+  - `FinderActivity.onResume current com.tencent.mm.plugin.finder.video.FinderThumbPlayerProxy setRate target via setPlaySpeed: 1.5`
+  - `FinderActivity.touchUp current com.tencent.mm.plugin.finder.video.FinderThumbPlayerProxy setRate target via setPlaySpeed: 1.5`
+
+注意：微信视频号界面不一定显示 `2x` / `1.5x` 文案，本实现是直接对真实播放器实例注入倍速；最终以体感和 LSPosed 运行日志为准。
+
 ### 当前 LSPosed 模块清单（2026-06-01）
 
 #### OnePlus Ace 5
