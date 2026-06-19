@@ -125,6 +125,7 @@ Avoid noisy global hooks in production. Broad `View.performClick`, all-class spe
 
 ## Release Checklist
 
+- If the hook architecture, Finder path, configuration sharing, supported version matrix, or build baseline changes, update `TECHNICAL_OVERVIEW.md` in the same change.
 - Update `gradle.properties` `appVersionName`.
 - Build with JDK 17 and confirm Gradle prints the expected versionCode.
 - Install on at least one rooted test device and verify WeChat Video Channels behavior.
