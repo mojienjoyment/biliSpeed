@@ -1,0 +1,4 @@
+interface:
+  display_name: "BiliSpeed WeChat Finder"
+  short_description: "复测和维护 BiliSpeed 微信视频号默认倍速 Hook。"
+  default_prompt: "复测 BiliSpeed 微信视频号默认倍速，并按项目流程定位失效原因。"

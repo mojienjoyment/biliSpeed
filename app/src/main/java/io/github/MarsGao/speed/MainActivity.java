@@ -52,9 +52,12 @@ public class MainActivity extends Activity {
 
     private void makePrefsReadable() {
         File dataDir = new File(getApplicationInfo().dataDir);
+        dataDir.setReadable(false, false);
+        dataDir.setReadable(true, true);
         dataDir.setExecutable(true, false);
         File prefsDir = new File(dataDir, "shared_prefs");
         if (prefsDir.exists()) {
+            prefsDir.setReadable(true, false);
             prefsDir.setExecutable(true, false);
         }
         File prefsFile = new File(getApplicationInfo().dataDir + "/shared_prefs/speed.xml");
