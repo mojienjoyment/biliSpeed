@@ -1,0 +1,6 @@
+id=videospeed-native
+name=VideoSpeed Native Hook
+version=v1.0
+versionCode=1
+author=MarsGao
+description=Native Zygisk hook for WeChat Channels (视频号) speed control via libxffmpeg.so atempo filter
