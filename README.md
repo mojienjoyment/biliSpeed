@@ -191,6 +191,20 @@ cd io.github.MarsGao.speed
 
 ## 📋 更新日志
 
+### v1.2.6 (2026-06-25)
+
+**🔧 Provider 初始化时机修复**
+
+- ✅ 当模块加载晚于目标进程 `Application.attach()` 时，使用 `ActivityThread.currentApplication()` 获取上下文，保证 Provider 桥接仍可用
+
+### v1.2.5 (2026-06-25)
+
+**🔧 Android 16 跨进程配置桥接修复**
+
+- ✅ 使用只读 `ContentProvider` 向所有 Hook 目标进程提供倍速配置，不再依赖跨 UID 读取私有 `speed.xml`
+- ✅ 微信视频号与其他受支持应用统一优先读取 Provider；旧 `XSharedPreferences` 仅作为兼容回退
+- ✅ 微信读取失败时统一回退到产品默认的 `1.5x`，不再隐式使用 `2.0x`
+
 ### v1.2.4 (2026-06-19)
 
 **🔧 跨进程速度配置可见性修复**

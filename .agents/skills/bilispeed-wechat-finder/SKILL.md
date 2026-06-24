@@ -110,6 +110,14 @@ If logs still keep the default target after `speed.xml` is correct, suspect `XSh
 
 Known fix in `1.2.4`: `MainActivity.makePrefsReadable()` keeps the app data root at `711`, then makes `shared_prefs` and `speed.xml` readable before WeChat reads `XSharedPreferences`.
 
+Current fix in `1.2.5`: target processes query the read-only `content://io.github.MarsGao.speed.config/speed` provider first. On Android 16 / Vector, confirm the provider returns the panel value before diagnosing Finder injection:
+
+```powershell
+& $adb -s $serial shell content query --uri content://io.github.MarsGao.speed.config/speed
+```
+
+`1.2.6` also resolves the application context through `ActivityThread.currentApplication()` when Vector loads the module after `Application.attach()`. A `[Config] source=XSharedPreferences fallback` line after installing `1.2.6` is therefore a configuration-bridge failure, not an expected OnePlus 13 compatibility state.
+
 ## Regression Triage
 
 Use this order:

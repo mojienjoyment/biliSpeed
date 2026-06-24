@@ -2,7 +2,7 @@
 
 > 文档定位：这是项目的技术总览、教学材料和外部 AI 上下文入口。它解释“系统为什么能工作”，而不是只给出安装步骤。
 >
-> 当前基线：VideoSpeed `1.2.4`，适配目标为微信 `8.0.69`（`versionCode 3022 GP / 3040`），最后更新：`2026-06-19`。
+> 当前基线：VideoSpeed `1.2.6`，适配目标为微信 `8.0.69`（`versionCode 3022 GP / 3040`），最后更新：`2026-06-25`。
 
 ## 1. 一页读懂
 
@@ -49,11 +49,12 @@ FinderThumbPlayerProxy.setPlaySpeed(用户配置)
 ```mermaid
 flowchart LR
     U[用户] --> A[VideoSpeed MainActivity]
-    A --> P[/data/data/io.github.MarsGao.speed/shared_prefs/speed.xml]
+    A --> P[私有 SharedPreferences speed]
+    P --> C[SpeedConfigProvider]
     L[LSPosed / Vector] --> H[加载 MainHook]
     H --> W[微信进程 com.tencent.mm]
     H --> O[其他受支持应用进程]
-    P -->|XSharedPreferences.reload| H
+    C -->|ContentResolver.query| H
     W --> F[Finder 当前 feed 播放器]
     H -->|setPlaySpeed target| F
 ```
@@ -94,7 +95,7 @@ handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam)
 | Hook API | `de.robv.android.xposed:api:82`，`compileOnly` |
 | Hook 运行时 | LSPosed / Vector 等兼容实现 |
 | 构建 | Gradle `8.0`、Android Gradle Plugin、JDK 17 |
-| 配置 | Android `SharedPreferences` + Xposed `XSharedPreferences` |
+| 配置 | Android `SharedPreferences` + 只读 `ContentProvider`（`XSharedPreferences` 兼容回退） |
 | 反射 | Java Reflection + `XposedHelpers` |
 | 发布 | GitHub Actions、LSPosed 格式 Tag：`VersionCode-VersionName` |
 
@@ -123,13 +124,13 @@ versionCode = major * 1,000,000 + minor * 1,000 + hotfix
 
 ### 5.2 读取端
 
-`MainHook` 在目标应用进程中持有：
+`MainHook` 在目标应用进程中优先查询：
 
 ```java
-new XSharedPreferences("io.github.MarsGao.speed", "speed")
+content://io.github.MarsGao.speed.config/speed
 ```
 
-每次读取前调用 `reload()`，使后续视频能够看到刚刚保存的值。普通应用默认私有数据目录不能被微信进程读取，因此设置页还需要建立最小的文件可见性：
+Provider 在 VideoSpeed 自身进程读取私有偏好，只向其他应用暴露一个只读浮点值。这样 Android 16/SELinux 下的目标进程无需穿越 VideoSpeed 私有目录。`XSharedPreferences` 与最小文件权限仍保留为兼容回退：
 
 ```text
 /data/data/io.github.MarsGao.speed/               711：可穿越，不对外列目录
@@ -304,6 +305,14 @@ setPlaybackParameters <- Media3/ExoPlayer 风格兜底
 - `speed.xml` 开放读取；
 - 在 Activity 初始化和每次成功保存后都执行权限修正。
 
+### 8.4 1.2.5：使用 Provider 作为主配置桥接
+
+Ace 5 / Android 16 / Vector 实测表明，即使设置页已保存 `1.5`，微信进程仍可能无法读取私有 XML 并回退到微信旧默认 `2.0`。`1.2.5` 使用标准 Android `ContentProvider` 在进程边界传递只读配置，所有 Hook 目标统一优先使用该桥接；文件读取只保留为兼容回退。
+
+### 8.5 1.2.6：处理晚加载模块的上下文获取
+
+部分 Vector 目标进程会在 `Application.attach()` 之后才加载模块。配置桥接因此还会从 `ActivityThread.currentApplication()` 获取当前应用上下文，确保 Provider 查询不因错过 `attach()` 而退回旧文件读取。
+
 因此，这次升级解决的是两个独立问题：
 
 ```text
@@ -424,7 +433,7 @@ $out | Select-String -Pattern `
 - 微信资源 ID、混淆方法和 holder 名仍有版本耦合。
 - `MainHook.java` 集中了多个应用的逻辑，后续可按应用拆分，但重构必须配套多应用回归测试。
 - 微信分支仍保留较多广谱/历史兜底 Hook，运行噪声和性能影响值得后续量化。
-- 配置文件通过传统 XSharedPreferences 和文件权限共享，简单可靠，但不是现代 Android 最强隔离方案。
+- 只读 Provider 会向本机其他应用公开当前倍速；它不提供写入接口，且不承载敏感数据。
 - 设置页只校验 float 格式，尚未限制合理速度范围。
 - 微信菜单 UI 不与播放器状态同步。
 - 手动菜单增强 Hook 依赖 `q40`，混淆漂移时冷却保护可能降级。
@@ -458,7 +467,7 @@ $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 ```text
 项目：VideoSpeed，Android Xposed/LSPosed Java 模块，包名 io.github.MarsGao.speed。
 目标：微信视频号每个新视频默认使用用户配置倍速。
-当前版本：VideoSpeed 1.2.4；适配目标为微信 8.0.69，versionCode 3022 GP / 3040。
+当前版本：VideoSpeed 1.2.6；适配目标为微信 8.0.69，versionCode 3022 GP / 3040。
 
 已验证主路径：
 FinderHomeAffinityUI
@@ -469,8 +478,8 @@ FinderHomeAffinityUI
 -> FinderThumbPlayerProxy.setPlaySpeed(float)
 
 注入时机：Activity.onResume 后 350/1200ms，以及 dispatchTouchEvent ACTION_UP 后 450ms。
-配置：MainActivity 写 SharedPreferences speed(float)，微信进程用 XSharedPreferences reload() 读取。
-1.2.4 修复了 dataDir/shared_prefs/speed.xml 路径权限，避免微信只读到旧值或 2.0 fallback。
+配置：MainActivity 写 SharedPreferences speed(float)，目标进程优先经只读 ContentProvider 查询；XSharedPreferences 仅为兼容回退。
+1.2.5/1.2.6 消除了 Android 16/Vector 下微信无法跨 UID 读取私有 XML 或错过 Application.attach 而回退至旧配置读取的问题。
 UI 不显示 2x 不代表失败，判断依据是播放行为和 LSPosed 日志中的 setPlaySpeed target。
 
 已否决的首选路线：ExoPlayer 猜测、LiteAV/MediaPlayer 盲目兜底、libxffmpeg/native 符号 Hook。

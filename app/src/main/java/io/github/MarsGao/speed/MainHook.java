@@ -1,6 +1,7 @@
 package io.github.MarsGao.speed;
 
 
+import android.app.Application;
 import android.content.Context;
 import android.content.res.Resources;
 import android.os.Bundle;
@@ -44,16 +45,23 @@ public class MainHook implements IXposedHookLoadPackage {
     private static Method twMethod = null;
 
     private static float getSpeedConfig() {
-        prefs.reload();
-        return prefs.getFloat("speed", 1.5f);
+        return SpeedConfigBridge.getSpeed(prefs, 1.5f);
     }
 
     private static float getWeChatSpeedConfig() {
-        prefs.reload();
-        return prefs.getFloat("speed", 2.0f);
+        return SpeedConfigBridge.getSpeed(prefs, 1.5f);
     }
     private static boolean hasSpeedConfigChanged() {
-        return prefs.hasFileChanged();
+        return SpeedConfigBridge.hasSpeedChanged(prefs);
+    }
+
+    private static void hookApplicationContext() {
+        XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class, new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                SpeedConfigBridge.setContext((Context) param.args[0]);
+            }
+        });
     }
 
     @Override
@@ -100,6 +108,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 return;
         }
         if (bili || twitter || douyin || red || wb || ig || tg || wx) {
+            hookApplicationContext();
             if (twitter) {
                 logTwitter("handleLoadPackage process=" + lpparam.processName);
                 hookTwitterModernPlayers(lpparam);
